@@ -1,0 +1,94 @@
+# Ansible managed
+
+global
+  log /dev/log local0
+  log /dev/log local1 notice
+
+  stats socket /var/run/haproxy-admin.sock level operator
+  stats timeout 60s
+  user haproxy
+  group haproxy
+  daemon
+  maxconn 10000
+
+  # Default SSL material locations
+  ca-base /etc/ssl/certs
+  crt-base /etc/ssl/private
+
+  # Default ciphers to use on SSL-enabled listening sockets.
+  # For more information, see ciphers(1SSL). This list is from:
+  #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+  ssl-default-bind-ciphers kEECDH+aRSA+AES:kRSA+AES:+AES256:RC4-SHA:!kEDH:!LOW:!EXP:!MD5:!aNULL:!eNULL
+  ssl-default-bind-options no-sslv3
+
+  # Default ciphers to use on SSL-enabled listening sockets.
+  # For more information, see ciphers(1SSL). This list is from:
+  #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+  ssl-default-server-ciphers kEECDH+aRSA+AES:kRSA+AES:+AES256:RC4-SHA:!kEDH:!LOW:!EXP:!MD5:!aNULL:!eNULL
+  ssl-default-server-options no-sslv3
+
+  nbproc 1
+
+defaults
+  log global
+  mode http
+  option httplog
+  option dontlognull
+  timeout connect 5000
+  timeout client 50000
+  timeout server 50000
+  timeout http-request 5s
+  maxconn 10000
+  fullconn 10000 
+  option http-server-close
+
+
+frontend  stats
+    bind *:9000
+    stats enable
+    stats uri /stats
+    stats auth admin:R3dh@t$umm!tyall
+    stats refresh 10s
+    mode http
+
+frontend http
+  description Front-end for all HTTP traffic
+  bind 0.0.0.0:80
+  mode http
+  capture request header X-Forwarded-Proto len 100
+  capture request header X-Forwarded-Host len 100
+  capture request header Host len 100
+  redirect scheme https code 301 if !{ ssl_fc }
+
+frontend https 
+  description Front-end for all HTTPs traffic
+  bind *:443 ssl crt /etc/ssl/private/redhatkeynote.com.pem  no-sslv3
+  mode http
+  stick-table type ip size 1m expire 60m store conn_rate(3s),conn_cur,gpc0,http_req_rate(10s),http_err_rate(20s)
+  acl abuse src_http_req_rate(https) ge 10
+  acl flag_abuser src_inc_gpc0(https) -m bool
+  acl scanner src_http_err_rate(https) ge 10
+  http-request deny if abuse flag_abuser scanner
+  capture request header X-Forwarded-Proto len 100
+  capture request header X-Forwarded-Host len 100
+  capture request header Host len 100
+  maxconn 10000
+  default_backend webservers
+
+backend webservers
+  description Back-end with all (Apache) webservers
+  bind-process 1
+  mode http
+  stick-table type ip size 1m expire 60m
+  stick on src
+  balance source
+  option http-keep-alive
+  option forwardfor
+  option httpchk GET / HTTP/1.1\r\nHost:redhatkeynote.com
+  cookie SERVERID insert indirect nocache
+  http-request set-header X-Forwarded-Port %[dst_port]
+  http-request add-header X-Forwarded-Proto https if { ssl_fc }
+  http-request set-header X-Forwarded-Host %[req.hdr(Host)]
+  http-request set-header Host %[req.hdr(Host)]
+  server sng game-frontend.apps.summit-azr-sg1.redhatazurekeynote.com:80 check maxconn 2000
+
